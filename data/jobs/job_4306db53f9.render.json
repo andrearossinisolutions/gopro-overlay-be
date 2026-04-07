@@ -1,0 +1,31 @@
+{
+  "jobId": "job_4306db53f9",
+  "sourceVideo": "data/uploads/job_4306db53f9.mp4",
+  "video": {
+    "duration_seconds": 0.0,
+    "fps": 0.0,
+    "width": 0,
+    "height": 0,
+    "codec": "ffprobe_not_installed"
+  },
+  "telemetryStats": {
+    "has_gps": true,
+    "points": 41,
+    "distance_km": 2.858,
+    "max_speed_kmh": 32.0,
+    "elevation_gain_m": 36.0
+  },
+  "config": {
+    "theme": "minimal-dark",
+    "units": "metric",
+    "position": "bottom-left",
+    "showSpeed": true,
+    "showAltitude": true,
+    "showCoordinates": false,
+    "showMiniMap": true,
+    "showTimestamp": false,
+    "fontScale": 1.0,
+    "margin": 24
+  },
+  "note": "MVP: qui c'\u00e8 il manifest usato dal frontend per simulare l'overlay. Nel passo successivo si aggancer\u00e0 ffmpeg."
+}
