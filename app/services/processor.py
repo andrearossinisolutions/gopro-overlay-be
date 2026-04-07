@@ -6,6 +6,7 @@ from typing import Any
 
 from app.schemas.render import RenderConfig
 from app.services.job_store import JobStore
+from app.services.renderer import render_video_with_overlay
 from app.services.telemetry import find_sample_for_time, generate_mock_telemetry
 from app.services.video_info import VideoProbeError, probe_video
 
@@ -34,7 +35,7 @@ def process_job_sync(job_id: str) -> None:
         )
     except VideoProbeError as exc:
         store.fail_job(job_id, f"Probe video fallito: {exc}")
-    except Exception as exc:  # pragma: no cover - MVP pragmatico
+    except Exception as exc:
         store.fail_job(job_id, f"Errore durante il processing: {exc}")
 
 
@@ -66,10 +67,11 @@ def build_preview_payload(job_id: str, t: float) -> dict[str, Any] | None:
 def create_render_output(job_id: str, config: RenderConfig) -> dict[str, Any] | None:
     job = store.get_job(job_id)
     telemetry = store.load_telemetry(job_id)
-    if not job or not telemetry or job.status not in {"ready", "done"}:
+    if not job or not telemetry or not job.uploaded_path or job.status not in {"ready", "done"}:
         return None
 
-    store.update_job(job_id, status="rendering", progress=75, step="writing_render_manifest")
+    store.update_job(job_id, status="rendering", progress=70, step="rendering_video", error_message=None)
+
     manifest_path = Path("data/jobs") / f"{job_id}.render.json"
     render_payload = {
         "jobId": job_id,
@@ -77,22 +79,38 @@ def create_render_output(job_id: str, config: RenderConfig) -> dict[str, Any] | 
         "video": job.video.model_dump(),
         "telemetryStats": job.telemetry.model_dump(),
         "config": config.model_dump(),
-        "note": "MVP: qui c'è il manifest usato dal frontend per simulare l'overlay. Nel passo successivo si aggancerà ffmpeg.",
+        "telemetryMode": "mock",
+        "note": "Il video finale viene renderizzato davvero da ffmpeg, ma la telemetria usata in questa MVP è ancora simulata.",
     }
     manifest_path.write_text(json.dumps(render_payload, indent=2), encoding="utf-8")
 
+    try:
+        artifacts = render_video_with_overlay(job_id, job.uploaded_path, telemetry, config)
+    except Exception as exc:
+        store.fail_job(job_id, f"Render fallito: {exc}")
+        raise
+
     store.update_job(
         job_id,
-        render_output_path=str(manifest_path),
+        render_output_path=artifacts["rendered_video_path"],
+        render_config_path=artifacts["render_config_path"],
         status="done",
         progress=100,
-        step="render_manifest_ready",
+        step="render_ready",
     )
+
+    rendered_name = Path(artifacts["rendered_video_path"]).name
+    config_name = Path(artifacts["render_config_path"]).name
+    manifest_name = manifest_path.name
 
     return {
         "jobId": job_id,
         "status": "done",
-        "renderManifestUrl": f"/files/jobs/{manifest_path.name}",
+        "message": "Render completato.",
+        "telemetryMode": "mock",
+        "renderedVideoUrl": f"/files/jobs/{rendered_name}",
+        "renderConfigUrl": f"/files/jobs/{config_name}",
+        "renderManifestUrl": f"/files/jobs/{manifest_name}",
         "config": config.model_dump(),
     }
 

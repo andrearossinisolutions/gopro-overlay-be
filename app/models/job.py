@@ -39,3 +39,4 @@ class Job(BaseModel):
     telemetry: TelemetryStats = Field(default_factory=TelemetryStats)
     telemetry_path: Optional[str] = None
     render_output_path: Optional[str] = None
+    render_config_path: Optional[str] = None

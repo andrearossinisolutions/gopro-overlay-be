@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas.render import RenderConfig
@@ -51,9 +53,31 @@ def get_preview(job_id: str, t: float = Query(default=0.0, ge=0.0)) -> dict:
     return payload
 
 
+@router.get("/jobs/{job_id}/artifacts")
+def get_artifacts(job_id: str) -> dict:
+    job = store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job non trovato.")
+
+    def url_for(path: str | None) -> str | None:
+        if not path:
+            return None
+        return f"/files/jobs/{Path(path).name}"
+
+    return {
+        "jobId": job.id,
+        "telemetryUrl": url_for(job.telemetry_path),
+        "renderedVideoUrl": url_for(job.render_output_path),
+        "renderConfigUrl": url_for(job.render_config_path),
+    }
+
+
 @router.post("/jobs/{job_id}/render")
 def render_job(job_id: str, config: RenderConfig) -> dict:
-    result = create_render_output(job_id, config)
+    try:
+        result = create_render_output(job_id, config)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="Job non trovato o non pronto.")
     return result

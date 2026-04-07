@@ -1,28 +1,31 @@
 # GoPro Telemetry Backend MVP
 
-Backend FastAPI minimale ma funzionante per iniziare a provare:
+Backend FastAPI per iniziare a provare:
 
 - upload di video GoPro o compatibili (`.mp4`, `.mov`, `.m4v`)
 - creazione job
 - probing base del video con `ffprobe` se disponibile
 - generazione di una telemetria **mock** strutturata come quella che servirà al frontend overlay
 - endpoint preview per leggere i dati a un certo timestamp
-- salvataggio di un render manifest da usare in una prima UI
+- render **reale** di un nuovo MP4 con overlay bruciato nel video tramite `ffmpeg`
+- download del video renderizzato
 
-## Perché questa versione è utile
+## Stato attuale
 
-Questa versione non estrae ancora la telemetria reale GoPro, ma ti mette in mano un backend vero con shape dati già sensata per:
-
-- pagina upload
-- pagina dettaglio job
-- preview overlay in tempo reale nel browser
-- futura integrazione con parser GoPro reale
-- futuro export video con `ffmpeg`
+Questa versione renderizza davvero il video finale, ma la telemetria usata per l'overlay è ancora **simulata**. Quindi il file `.mp4` in output è reale, mentre i dati GPS/velocità non arrivano ancora dal tuo file GoPro.
 
 ## Requisiti
 
 - Python 3.11+
+- `ffmpeg` installato e disponibile nel `PATH`
 - consigliato: `ffprobe` installato nel sistema
+
+Verifica rapida:
+
+```bash
+ffmpeg -version
+ffprobe -version
+```
 
 ## Avvio
 
@@ -43,25 +46,6 @@ Poi apri:
 ### `POST /api/uploads`
 Upload multipart con chiave `file`.
 
-Risposta esempio:
-
-```json
-{
-  "jobId": "job_1234567890",
-  "status": "ready",
-  "fileUrl": "/files/uploads/job_1234567890.mp4"
-}
-```
-
-### `GET /api/jobs`
-Lista job.
-
-### `GET /api/jobs/{jobId}`
-Dettaglio job completo.
-
-### `GET /api/jobs/{jobId}/status`
-Stato compatto per polling.
-
 ### `GET /api/jobs/{jobId}/telemetry`
 Restituisce il JSON normalizzato con `video` e `samples`.
 
@@ -69,7 +53,7 @@ Restituisce il JSON normalizzato con `video` e `samples`.
 Restituisce il sample più vicino a quel tempo e le label overlay già pronte.
 
 ### `POST /api/jobs/{jobId}/render`
-Salva una configurazione di render e produce un manifest JSON.
+Genera davvero un file MP4 renderizzato con overlay.
 
 Body esempio:
 
@@ -88,94 +72,40 @@ Body esempio:
 }
 ```
 
-## Forma dei dati preview
-
-Esempio risposta di `/preview`:
+Risposta esempio:
 
 ```json
 {
   "jobId": "job_xxx",
-  "time": 12.5,
-  "overlay": {
-    "speedLabel": "31.2 km/h",
-    "altitudeLabel": "126.8 m",
-    "coordinatesLabel": "45.468100, 9.201220",
-    "timestampLabel": "00:00:12"
-  },
-  "sample": {
-    "t": 12.5,
-    "lat": 45.4681,
-    "lon": 9.20122,
-    "alt": 126.8,
-    "speed_kmh": 31.2,
-    "heading": 145.2
-  }
+  "status": "done",
+  "message": "Render completato.",
+  "telemetryMode": "mock",
+  "renderedVideoUrl": "/files/jobs/job_xxx.rendered.mp4",
+  "renderConfigUrl": "/files/jobs/job_xxx.render-config.json",
+  "renderManifestUrl": "/files/jobs/job_xxx.render.json"
 }
 ```
 
-## Struttura progetto
+### `GET /api/jobs/{jobId}/artifacts`
+Restituisce gli URL dei file generati:
 
-```text
-app/
-  api/
-    jobs.py
-    uploads.py
-  models/
-    job.py
-  schemas/
-    render.py
-  services/
-    job_store.py
-    processor.py
-    telemetry.py
-    video_info.py
-  main.py
+- `telemetryUrl`
+- `renderedVideoUrl`
+- `renderConfigUrl`
 
-data/
-  uploads/
-  jobs/
-```
+## Come provarlo
+
+1. Carica un video da `/docs` oppure dal frontend.
+2. Prendi il `jobId`.
+3. Chiama `POST /api/jobs/{jobId}/render`.
+4. Apri `renderedVideoUrl` nel browser oppure scaricalo direttamente.
+
+## Nota importante
+
+Il render è sincrono: la richiesta `POST /render` resta aperta fino alla fine dell'encoding. Va bene per una MVP locale, ma per video lunghi conviene spostarlo in un worker asincrono.
 
 ## Prossimo step consigliato
 
-1. Collegare un frontend Next.js con:
-   - upload file
-   - polling status
-   - mappa
-   - player video
-   - preview overlay live con `/preview`
-2. Sostituire `generate_mock_telemetry()` con parser reale GoPro.
-3. Aggiungere worker e coda per processing asincrono.
-4. Agganciare `ffmpeg` per render finale.
-
-## Nota su telemetria reale GoPro
-
-Il punto preciso da sostituire sarà in:
-
-- `app/services/telemetry.py`
-
-Lì puoi cambiare la funzione mock con una funzione del tipo:
-
-```python
-extract_gopro_telemetry(video_path: str) -> dict
-```
-
-che poi normalizza in questo stesso schema:
-
-```json
-{
-  "video": { ... },
-  "samples": [
-    {
-      "t": 0.0,
-      "lat": 45.0,
-      "lon": 9.0,
-      "alt": 120.0,
-      "speed_kmh": 18.5,
-      "heading": 91.0
-    }
-  ]
-}
-```
-
-Così il frontend non cambia quasi per niente.
+1. Sostituire `generate_mock_telemetry()` con parser reale GoPro.
+2. Aggiungere worker e coda per render asincrono.
+3. Aggiungere mini-mappa reale come asset grafico o overlay video.
