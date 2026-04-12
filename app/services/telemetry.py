@@ -93,6 +93,27 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
+def _get_tag(row: dict[str, Any], tag_name: str) -> Any:
+    """
+    ExifTool con -G3 restituisce spesso chiavi come:
+    - Main:GPSLatitude
+    - Doc1:GPSLatitude
+    - Doc25:GPSSpeed
+
+    Questa funzione cerca prima il tag puro, poi qualsiasi chiave che termini
+    con :<tag_name>.
+    """
+    if tag_name in row:
+        return row[tag_name]
+
+    suffix = f":{tag_name}"
+    for key, value in row.items():
+        if key.endswith(suffix):
+            return value
+
+    return None
+
+
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
     p1 = math.radians(lat1)
@@ -174,11 +195,11 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
     exiftool = _require_exiftool()
     video_path = Path(video_path)
 
-    # 1) Metadati video base
+    if not video_path.exists():
+        raise TelemetryExtractionError(f"File video non trovato: {video_path}")
+
     video = probe_video(video_path)
 
-    # 2) Estrazione timed metadata con -ee e valori numerici con -n
-    #    JSON flat, una entry per sample/documento embedded.
     cmd = [
         exiftool,
         "-ee",
@@ -191,20 +212,18 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
     ]
     rows = _run_json_command(cmd)
 
-    # 3) Filtra i sample che hanno coordinate GPS
     samples_raw: list[dict[str, Any]] = []
     for row in rows:
-        lat = _to_float(row.get("GPSLatitude"))
-        lon = _to_float(row.get("GPSLongitude"))
+        lat = _to_float(_get_tag(row, "GPSLatitude"))
+        lon = _to_float(_get_tag(row, "GPSLongitude"))
         if lat is None or lon is None:
             continue
 
-        alt = _to_float(row.get("GPSAltitude")) or 0.0
-        speed = _to_float(row.get("GPSSpeed"))
-        speed_ref = str(row.get("GPSSpeedRef") or "").upper()
+        alt = _to_float(_get_tag(row, "GPSAltitude")) or 0.0
 
-        # ExifTool spesso restituisce GPSSpeed numerica già normalizzata,
-        # ma il ref può comunque essere utile.
+        speed = _to_float(_get_tag(row, "GPSSpeed"))
+        speed_ref = str(_get_tag(row, "GPSSpeedRef") or "").upper()
+
         speed_kmh = 0.0
         if speed is not None:
             if speed_ref == "K":
@@ -216,13 +235,17 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
             else:
                 speed_kmh = speed
 
-        heading = _to_float(row.get("GPSImgDirection")) or _to_float(row.get("GPSDestBearing")) or 0.0
+        heading = (
+            _to_float(_get_tag(row, "GPSImgDirection"))
+            or _to_float(_get_tag(row, "GPSDestBearing"))
+            or 0.0
+        )
 
         gps_dt = _parse_datetime(
-            row.get("GPSDateTime")
-            or row.get("GPSDateStamp")
-            or row.get("DateTimeOriginal")
-            or row.get("CreateDate")
+            _get_tag(row, "GPSDateTime")
+            or _get_tag(row, "GPSDateStamp")
+            or _get_tag(row, "DateTimeOriginal")
+            or _get_tag(row, "CreateDate")
         )
 
         samples_raw.append(
@@ -237,26 +260,14 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
         )
 
     if not samples_raw:
-        return {
-            "video": {
-                "duration_seconds": video.duration_seconds,
-                "fps": video.fps,
-                "width": video.width,
-                "height": video.height,
-                "codec": video.codec,
-            },
-            "samples": [],
-            "stats": {
-                "has_gps": False,
-                "points": 0,
-                "distance_km": 0.0,
-                "max_speed_kmh": 0.0,
-                "elevation_gain_m": 0.0,
-            },
-        }
+        raise TelemetryExtractionError(
+            "Nessun punto GPS trovato nel video GoPro. "
+            "Verifica che il GPS fosse attivo durante la registrazione e che il file contenga telemetria GPMF."
+        )
 
-    # 4) Ordina temporalmente e normalizza t in secondi
-    samples_raw.sort(key=lambda x: x["gps_dt"] or datetime.fromtimestamp(0, tz=timezone.utc))
+    samples_raw.sort(
+        key=lambda x: x["gps_dt"] or datetime.fromtimestamp(0, tz=timezone.utc)
+    )
     t0 = samples_raw[0]["gps_dt"]
 
     normalized_samples: list[dict[str, Any]] = []
@@ -265,12 +276,12 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
     elevation_gain_m = 0.0
 
     prev = None
-    for item in samples_raw:
+    for index, item in enumerate(samples_raw):
         gps_dt = item["gps_dt"]
         if gps_dt and t0:
             t = max(0.0, (gps_dt - t0).total_seconds())
         else:
-            t = float(len(normalized_samples))
+            t = float(index)
 
         sample = {
             "t": round(t, 3),
@@ -282,7 +293,9 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
         }
 
         if prev is not None:
-            total_distance_km += _haversine_km(prev["lat"], prev["lon"], sample["lat"], sample["lon"])
+            total_distance_km += _haversine_km(
+                prev["lat"], prev["lon"], sample["lat"], sample["lon"]
+            )
             alt_gain = sample["alt"] - prev["alt"]
             if alt_gain > 0:
                 elevation_gain_m += alt_gain
