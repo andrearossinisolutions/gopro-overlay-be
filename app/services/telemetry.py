@@ -321,3 +321,19 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
             "elevation_gain_m": round(elevation_gain_m, 1),
         },
     }
+    
+def find_sample_for_time(telemetry: dict[str, Any], t: float) -> dict[str, Any] | None:
+    samples = telemetry.get("samples") or []
+    if not samples:
+        return None
+
+    try:
+        target = float(t)
+    except (TypeError, ValueError):
+        return samples[0] if samples else None
+
+    nearest = min(
+        samples,
+        key=lambda sample: abs(float(sample.get("t", 0.0)) - target),
+    )
+    return nearest
