@@ -32,6 +32,7 @@ jobs:
             --exclude ".venv" \
             --exclude "__pycache__" \
             --exclude ".pytest_cache" \
+            --exclude "data" \
             "$GITHUB_WORKSPACE/" \
             "$APP_DIR/"
 
