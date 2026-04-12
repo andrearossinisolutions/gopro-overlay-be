@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -21,6 +22,9 @@ class VideoInfo:
     width: int
     height: int
     codec: str
+
+
+_DOC_KEY_RE = re.compile(r"^(Doc\d+):(.+)$")
 
 
 def _require_exiftool() -> str:
@@ -71,8 +75,6 @@ def _parse_datetime(value: str | None) -> datetime | None:
     for fmt in candidates:
         try:
             dt = datetime.strptime(value, fmt)
-            if value.endswith("Z"):
-                return dt.replace(tzinfo=timezone.utc)
             return dt.replace(tzinfo=timezone.utc)
         except ValueError:
             continue
@@ -93,27 +95,6 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def _get_tag(row: dict[str, Any], tag_name: str) -> Any:
-    """
-    ExifTool con -G3 restituisce spesso chiavi come:
-    - Main:GPSLatitude
-    - Doc1:GPSLatitude
-    - Doc25:GPSSpeed
-
-    Questa funzione cerca prima il tag puro, poi qualsiasi chiave che termini
-    con :<tag_name>.
-    """
-    if tag_name in row:
-        return row[tag_name]
-
-    suffix = f":{tag_name}"
-    for key, value in row.items():
-        if key.endswith(suffix):
-            return value
-
-    return None
-
-
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371.0
     p1 = math.radians(lat1)
@@ -123,6 +104,45 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
     a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
+
+
+def _group_doc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    ExifTool con -G3 può restituire:
+    - più oggetti JSON, uno per DocN
+    - oppure un solo oggetto con tante chiavi tipo Doc1:GPSLatitude, Doc2:GPSSpeed, ...
+
+    Questa funzione normalizza tutto in una lista di dict, uno per ogni DocN.
+    """
+    grouped: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        current_plain: dict[str, Any] = {}
+
+        for key, value in row.items():
+            match = _DOC_KEY_RE.match(key)
+            if match:
+                doc_id, tag_name = match.groups()
+                grouped.setdefault(doc_id, {})
+                grouped[doc_id][tag_name] = value
+            else:
+                current_plain[key] = value
+
+        # Caso alternativo: ExifTool può già restituire una riga “piatta” con GPSLatitude senza prefisso.
+        if "GPSLatitude" in current_plain and "GPSLongitude" in current_plain:
+            doc_id = f"ROW{len(grouped) + 1}"
+            grouped[doc_id] = current_plain
+
+    def sort_key(item: tuple[str, dict[str, Any]]) -> tuple[int, str]:
+        key = item[0]
+        if key.startswith("Doc"):
+            try:
+                return (0, f"{int(key[3:]):09d}")
+            except ValueError:
+                return (0, key)
+        return (1, key)
+
+    return [payload for _, payload in sorted(grouped.items(), key=sort_key)]
 
 
 def probe_video(video_path: str | Path) -> VideoInfo:
@@ -211,18 +231,19 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
         str(video_path),
     ]
     rows = _run_json_command(cmd)
+    doc_rows = _group_doc_rows(rows)
 
     samples_raw: list[dict[str, Any]] = []
-    for row in rows:
-        lat = _to_float(_get_tag(row, "GPSLatitude"))
-        lon = _to_float(_get_tag(row, "GPSLongitude"))
+    for row in doc_rows:
+        lat = _to_float(row.get("GPSLatitude"))
+        lon = _to_float(row.get("GPSLongitude"))
         if lat is None or lon is None:
             continue
 
-        alt = _to_float(_get_tag(row, "GPSAltitude")) or 0.0
+        alt = _to_float(row.get("GPSAltitude")) or 0.0
 
-        speed = _to_float(_get_tag(row, "GPSSpeed"))
-        speed_ref = str(_get_tag(row, "GPSSpeedRef") or "").upper()
+        speed = _to_float(row.get("GPSSpeed"))
+        speed_ref = str(row.get("GPSSpeedRef") or "").upper()
 
         speed_kmh = 0.0
         if speed is not None:
@@ -236,16 +257,16 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
                 speed_kmh = speed
 
         heading = (
-            _to_float(_get_tag(row, "GPSImgDirection"))
-            or _to_float(_get_tag(row, "GPSDestBearing"))
+            _to_float(row.get("GPSImgDirection"))
+            or _to_float(row.get("GPSDestBearing"))
             or 0.0
         )
 
         gps_dt = _parse_datetime(
-            _get_tag(row, "GPSDateTime")
-            or _get_tag(row, "GPSDateStamp")
-            or _get_tag(row, "DateTimeOriginal")
-            or _get_tag(row, "CreateDate")
+            row.get("GPSDateTime")
+            or row.get("GPSDateStamp")
+            or row.get("DateTimeOriginal")
+            or row.get("CreateDate")
         )
 
         samples_raw.append(
@@ -261,8 +282,8 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
 
     if not samples_raw:
         raise TelemetryExtractionError(
-            "Nessun punto GPS trovato nel video GoPro. "
-            "Verifica che il GPS fosse attivo durante la registrazione e che il file contenga telemetria GPMF."
+            "Nessun punto GPS temporale trovato nel video GoPro. "
+            "Verifica che il GPS fosse attivo e che il file contenga telemetria GPMF."
         )
 
     samples_raw.sort(
@@ -321,7 +342,8 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
             "elevation_gain_m": round(elevation_gain_m, 1),
         },
     }
-    
+
+
 def find_sample_for_time(telemetry: dict[str, Any], t: float) -> dict[str, Any] | None:
     samples = telemetry.get("samples") or []
     if not samples:
