@@ -55,3 +55,13 @@ jobs:
           . .venv/bin/activate
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
+      - name: Restart backend service
+        run: |
+          sudo systemctl restart "$SERVICE_NAME"
+          sudo systemctl status "$SERVICE_NAME" --no-pager
+
+      - name: Health check
+        run: |
+          sleep 3
+          curl -f http://127.0.0.1:8000/ > /dev/null
