@@ -7,7 +7,7 @@ from typing import Any
 from app.schemas.render import RenderConfig
 from app.services.job_store import JobStore
 from app.services.renderer import render_video_with_overlay
-from app.services.telemetry import find_sample_for_time, generate_mock_telemetry
+from app.services.telemetry import extract_gopro_telemetry, find_sample_for_time
 from app.services.video_info import VideoProbeError, probe_video
 
 store = JobStore()
@@ -19,11 +19,18 @@ def process_job_sync(job_id: str) -> None:
         return
 
     try:
-        store.update_job(job_id, status="parsing", progress=25, step="probing_video")
+        store.update_job(job_id, status="parsing", progress=15, step="probing_video")
         video = probe_video(job.uploaded_path or "")
-        store.update_job(job_id, video=video, progress=55, step="extracting_telemetry")
+        store.update_job(job_id, video=video, progress=45, step="extracting_telemetry")
 
-        telemetry_payload, telemetry_stats = generate_mock_telemetry(video)
+        telemetry_result = extract_gopro_telemetry(job.uploaded_path or "")
+
+        telemetry_payload = {
+            "video": telemetry_result["video"],
+            "samples": telemetry_result["samples"],
+        }
+        telemetry_stats = telemetry_result["stats"]
+
         store.save_telemetry(job_id, telemetry_payload)
 
         store.update_job(
@@ -37,7 +44,6 @@ def process_job_sync(job_id: str) -> None:
         store.fail_job(job_id, f"Probe video fallito: {exc}")
     except Exception as exc:
         store.fail_job(job_id, f"Errore durante il processing: {exc}")
-
 
 
 def build_preview_payload(job_id: str, t: float) -> dict[str, Any] | None:
@@ -63,14 +69,21 @@ def build_preview_payload(job_id: str, t: float) -> dict[str, Any] | None:
     }
 
 
-
 def create_render_output(job_id: str, config: RenderConfig) -> dict[str, Any] | None:
     job = store.get_job(job_id)
     telemetry = store.load_telemetry(job_id)
     if not job or not telemetry or not job.uploaded_path or job.status not in {"ready", "done"}:
         return None
 
-    store.update_job(job_id, status="rendering", progress=70, step="rendering_video", error_message=None)
+    telemetry_mode = "real" if job.telemetry.has_gps else "mock"
+
+    store.update_job(
+        job_id,
+        status="rendering",
+        progress=70,
+        step="rendering_video",
+        error_message=None,
+    )
 
     manifest_path = Path("data/jobs") / f"{job_id}.render.json"
     render_payload = {
@@ -79,8 +92,14 @@ def create_render_output(job_id: str, config: RenderConfig) -> dict[str, Any] | 
         "video": job.video.model_dump(),
         "telemetryStats": job.telemetry.model_dump(),
         "config": config.model_dump(),
-        "telemetryMode": "mock",
-        "note": "Il video finale viene renderizzato davvero da ffmpeg, ma la telemetria usata in questa MVP è ancora simulata.",
+        "telemetryMode": telemetry_mode,
+        "note": (
+            "Il video finale viene renderizzato davvero da ffmpeg. "
+            "La telemetria usata per l’overlay proviene dal file GoPro."
+            if telemetry_mode == "real"
+            else "Il video finale viene renderizzato davvero da ffmpeg, "
+            "ma il file non contiene dati GPS utilizzabili."
+        ),
     }
     manifest_path.write_text(json.dumps(render_payload, indent=2), encoding="utf-8")
 
@@ -107,13 +126,12 @@ def create_render_output(job_id: str, config: RenderConfig) -> dict[str, Any] | 
         "jobId": job_id,
         "status": "done",
         "message": "Render completato.",
-        "telemetryMode": "mock",
+        "telemetryMode": telemetry_mode,
         "renderedVideoUrl": f"/files/jobs/{rendered_name}",
         "renderConfigUrl": f"/files/jobs/{config_name}",
         "renderManifestUrl": f"/files/jobs/{manifest_name}",
         "config": config.model_dump(),
     }
-
 
 
 def _format_seconds(value: float) -> str:
