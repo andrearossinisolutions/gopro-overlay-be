@@ -178,7 +178,6 @@ def extract_gopro_telemetry(video_path):
         elif speed_ref == "N":
             speed_kmh = raw_speed * 1.852
         else:
-            # GoPro GPMF → tipicamente m/s
             speed_kmh = raw_speed * 3.6
 
         heading = (
@@ -229,6 +228,7 @@ def extract_gopro_telemetry(video_path):
 
         sample = {
             "t": round(t, 3),
+            "gps_dt": item["gps_dt"].isoformat() if item["gps_dt"] else None,
             "lat": round(item["lat"], 7),
             "lon": round(item["lon"], 7),
             "alt": round(item["alt"], 2),
