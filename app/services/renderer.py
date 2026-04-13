@@ -143,10 +143,10 @@ def _overlay_text(sample: dict[str, Any], config: RenderConfig) -> str:
 
     if config.showAltitude:
         alt = float(sample.get("alt") or 0.0)
-        if config.units == "imperial":
-            rows.append(f"Altitude: {alt * 3.28084:.0f} ft")
-        else:
+        if config.units == "metric":
             rows.append(f"Altitude: {alt:.1f} m")
+        else:
+            rows.append(f"Altitude: {alt * 3.28084:.0f} ft")
 
     if config.showCoordinates:
         rows.append(

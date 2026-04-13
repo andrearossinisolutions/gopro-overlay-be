@@ -60,7 +60,7 @@ Body esempio:
 ```json
 {
   "theme": "minimal-dark",
-  "units": "metric",
+  "units": "hybrid",
   "position": "bottom-left",
   "showSpeed": true,
   "showAltitude": true,

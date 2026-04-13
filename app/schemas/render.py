@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class RenderConfig(BaseModel):
     theme: Literal["minimal-dark", "minimal-light"] = "minimal-dark"
-    units: Literal["metric", "imperial"] = "metric"
+    units: Literal["metric", "imperial", "hybrid"] = "hybrid"
     position: Literal["top-left", "top-right", "bottom-left", "bottom-right"] = "bottom-left"
 
     # showSpeed = GS per compatibilità con il FE già esistente
@@ -15,7 +15,7 @@ class RenderConfig(BaseModel):
     showAltitude: bool = True
     showCoordinates: bool = False
     showMiniMap: bool = False
-    showTimestamp: bool = True
+    showTimestamp: bool = False
     showHeading: bool = True
 
     fontScale: float = 1.0
