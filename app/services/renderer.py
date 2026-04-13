@@ -9,13 +9,19 @@ from typing import Any
 from app.schemas.render import RenderConfig
 
 
-def render_video_with_overlay(job_id: str, source_video_path: str, telemetry: dict[str, Any], config: RenderConfig) -> dict[str, str]:
+def render_video_with_overlay(
+    job_id: str,
+    source_video_path: str,
+    telemetry: dict[str, Any],
+    config: RenderConfig,
+) -> dict[str, str]:
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
         raise RuntimeError("ffmpeg non trovato nel PATH. Installa ffmpeg per generare il video finale.")
 
     jobs_dir = Path("data/jobs")
     jobs_dir.mkdir(parents=True, exist_ok=True)
+
     ass_path = jobs_dir / f"{job_id}.overlay.ass"
     config_path = jobs_dir / f"{job_id}.render-config.json"
     output_path = jobs_dir / f"{job_id}.rendered.mp4"
@@ -59,8 +65,10 @@ def _build_ass_script(telemetry: dict[str, Any], config: RenderConfig) -> str:
     video = telemetry.get("video") or {}
     width = int(video.get("width") or 1920)
     height = int(video.get("height") or 1080)
+
     font_size = max(22, int(28 * config.fontScale))
     alignment, margin_l, margin_r, margin_v = _style_for_position(config.position, config.margin)
+
     primary = "&H00FFFFFF" if config.theme == "minimal-dark" else "&H00111111"
     outline = "&H00111111" if config.theme == "minimal-dark" else "&H00FFFFFF"
     back = "&H66000000" if config.theme == "minimal-dark" else "&H66FFFFFF"
@@ -83,7 +91,18 @@ def _build_ass_script(telemetry: dict[str, Any], config: RenderConfig) -> str:
 
     samples = telemetry.get("samples") or []
     if not samples:
-        samples = [{"t": 0.0, "speed_kmh": 0.0, "alt": 0.0, "lat": 0.0, "lon": 0.0, "heading": 0.0}]
+        samples = [
+            {
+                "t": 0.0,
+                "speed_kmh": 0.0,
+                "gs_kmh": 0.0,
+                "ias_kmh": 0.0,
+                "alt": 0.0,
+                "lat": 0.0,
+                "lon": 0.0,
+                "heading": 0.0,
+            }
+        ]
 
     for idx, sample in enumerate(samples):
         start = float(sample.get("t") or 0.0)
@@ -91,8 +110,10 @@ def _build_ass_script(telemetry: dict[str, Any], config: RenderConfig) -> str:
             end = float(samples[idx + 1].get("t") or start + 0.5)
         else:
             end = start + 0.5
+
         if end <= start:
             end = start + 0.5
+
         text = _overlay_text(sample, config)
         lines.append(
             f"Dialogue: 0,{_format_ass_time(start)},{_format_ass_time(end)},Overlay,,0,0,0,,{_escape_ass_text(text)}"
@@ -103,25 +124,44 @@ def _build_ass_script(telemetry: dict[str, Any], config: RenderConfig) -> str:
 
 def _overlay_text(sample: dict[str, Any], config: RenderConfig) -> str:
     rows: list[str] = []
+
     if config.showSpeed:
-        speed = float(sample.get("speed_kmh") or 0.0)
+        gs = float(sample.get("gs_kmh", sample.get("speed_kmh") or 0.0))
         if config.units == "imperial":
-            rows.append(f"Speed: {speed * 0.621371:.1f} mph")
+            rows.append(f"GS: {gs * 0.621371:.1f} mph")
         else:
-            rows.append(f"Speed: {speed:.1f} km/h")
+            rows.append(f"GS: {gs:.1f} km/h")
+
+    if config.showIAS:
+        ias = sample.get("ias_kmh")
+        if ias is not None:
+            ias = float(ias)
+            if config.units == "imperial":
+                rows.append(f"IAS: {ias * 0.621371:.1f} mph")
+            else:
+                rows.append(f"IAS: {ias:.1f} km/h")
+
     if config.showAltitude:
         alt = float(sample.get("alt") or 0.0)
         if config.units == "imperial":
             rows.append(f"Altitude: {alt * 3.28084:.0f} ft")
         else:
             rows.append(f"Altitude: {alt:.1f} m")
+
     if config.showCoordinates:
-        rows.append(f"GPS: {float(sample.get('lat') or 0.0):.6f}, {float(sample.get('lon') or 0.0):.6f}")
+        rows.append(
+            f"GPS: {float(sample.get('lat') or 0.0):.6f}, {float(sample.get('lon') or 0.0):.6f}"
+        )
+
     if config.showTimestamp:
         rows.append(f"Time: {_format_hms(float(sample.get('t') or 0.0))}")
+
     if config.showMiniMap:
         rows.append("Mini-map: placeholder")
-    rows.append(f"Heading: {float(sample.get('heading') or 0.0):.0f}°")
+
+    if config.showHeading:
+        rows.append(f"Heading: {float(sample.get('heading') or 0.0):.0f}°")
+
     return r"\N".join(rows)
 
 
@@ -159,5 +199,5 @@ def _escape_ass_text(text: str) -> str:
 
 
 def _ffmpeg_escape_path(value: str) -> str:
-    escaped = value.replace('\\', r'\\').replace(':', r'\:')
-    return escaped.replace(',', r'\,')
+    escaped = value.replace("\\", r"\\").replace(":", r"\:")
+    return escaped.replace(",", r"\,")

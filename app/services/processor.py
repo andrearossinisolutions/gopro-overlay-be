@@ -39,16 +39,10 @@ def process_job_sync(job_id: str) -> None:
         # 🚀 --- WEATHER + IAS ---
         try:
             if samples:
-                start_dt = samples[0].get("t")
-                end_dt = samples[-1].get("t")
+                from datetime import datetime
 
-                # ⚠️ non abbiamo datetime reale nei samples → fallback UTC now-based
-                # meglio: usare gps_dt lato telemetry se lo vuoi migliorare
-                from datetime import datetime, timedelta, timezone
-
-                now = datetime.now(timezone.utc)
-                start_time = now
-                end_time = now + timedelta(hours=1)
+                start_time = datetime.fromisoformat(samples[0]["gps_dt"]).replace(tzinfo=None)
+                end_time = datetime.fromisoformat(samples[-1]["gps_dt"]).replace(tzinfo=None)
 
                 lat = samples[0]["lat"]
                 lon = samples[0]["lon"]
@@ -56,9 +50,7 @@ def process_job_sync(job_id: str) -> None:
                 weather_series = fetch_weather_timeseries(lat, lon, start_time, end_time)
 
                 for s in samples:
-                    # tempo fittizio distribuito
-                    ratio = s["t"] / samples[-1]["t"] if samples[-1]["t"] > 0 else 0
-                    current_time = start_time + (end_time - start_time) * ratio
+                    current_time = datetime.fromisoformat(s["gps_dt"]).replace(tzinfo=None)
 
                     weather = interpolate_weather(weather_series, current_time)
 
@@ -115,17 +107,18 @@ def build_preview_payload(job_id: str, t: float) -> dict[str, Any] | None:
     if not sample:
         return None
 
+    gs = sample.get("gs_kmh", sample.get("speed_kmh", 0))
+    ias = sample.get("ias_kmh")
+
     return {
         "jobId": job_id,
         "time": round(t, 3),
         "overlay": {
-            # 🆕 GS + IAS
-            "groundSpeedLabel": f"{sample.get('gs_kmh', sample['speed_kmh']):.1f} km/h",
-            "iasLabel": f"{sample.get('ias_kmh', 0):.1f} km/h",
-
+            "groundSpeedLabel": f"{gs:.1f} km/h",
+            "iasLabel": f"{ias:.1f} km/h" if ias is not None else None,
             "altitudeLabel": f"{sample['alt']:.1f} m",
             "coordinatesLabel": f"{sample['lat']:.6f}, {sample['lon']:.6f}",
-            "headingLabel": f"{sample['heading']:.0f}°",
+            "headingLabel": f"{sample.get('heading', 0):.0f}°",
             "timestampLabel": _format_seconds(t),
         },
         "sample": sample,
