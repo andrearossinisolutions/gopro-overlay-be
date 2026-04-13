@@ -199,7 +199,7 @@ def _build_ass_script(telemetry: dict[str, Any], config: RenderConfig) -> str:
             box_path = _rect_path(x1, y1, x2, y2)
             lines.append(
                 f"Dialogue: 2,{ass_start},{ass_end},Meta,,0,0,0,,"
-                f"{{\\p1\\bord1\\shad0\\c{_shape_fill_color(config)}\\3c{_shape_outline_color(config)}}}"
+                f"{{\\an7\\pos(0,0)\\p1\\bord1\\shad0\\c{_shape_fill_color(config)}\\3c{_shape_outline_color(config)}}}"
                 f"{box_path}"
             )
             lines.append(
@@ -286,14 +286,14 @@ def _build_gauge_dialogues(
     # Background disc
     lines.append(
         f"Dialogue: 1,{ass_start},{ass_end},Meta,,0,0,0,,"
-        f"{{\\p1\\bord0\\shad0\\c{_disc_fill_color(config)}}}"
+        f"{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{_disc_fill_color(config)}}}"
         f"{_circle_path(cx, cy, outer_r, 48)}"
     )
 
     # Outer ring
     lines.append(
         f"Dialogue: 2,{ass_start},{ass_end},Meta,,0,0,0,,"
-        f"{{\\p1\\bord0\\shad0\\c{_ring_color(metric['key'], config)}}}"
+        f"{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{_ring_color(metric['key'], config)}}}"
         f"{_ring_path(cx, cy, outer_r, inner_r, 64)}"
     )
 
@@ -302,14 +302,14 @@ def _build_gauge_dialogues(
     needle_width = max(6, int(radius * 0.10))
     lines.append(
         f"Dialogue: 3,{ass_start},{ass_end},Meta,,0,0,0,,"
-        f"{{\\p1\\bord0\\shad0\\c{_needle_color(metric['key'], config)}}}"
+        f"{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{_needle_color(metric['key'], config)}}}"
         f"{_needle_path(cx, cy, needle_len, needle_width, angle)}"
     )
 
     # Center hub
     lines.append(
         f"Dialogue: 4,{ass_start},{ass_end},Meta,,0,0,0,,"
-        f"{{\\p1\\bord0\\shad0\\c{_hub_color(config)}}}"
+        f"{{\\an7\\pos(0,0)\\p1\\bord0\\shad0\\c{_hub_color(config)}}}"
         f"{_circle_path(cx, cy, max(6, int(radius * 0.10)), 24)}"
     )
 
