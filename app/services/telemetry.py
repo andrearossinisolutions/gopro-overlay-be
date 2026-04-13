@@ -168,7 +168,18 @@ def extract_gopro_telemetry(video_path):
             continue
 
         alt = _to_float(row.get("GPSAltitude")) or 0.0
-        speed = _to_float(row.get("GPSSpeed")) or 0.0
+        raw_speed = _to_float(row.get("GPSSpeed")) or 0.0
+        speed_ref = str(row.get("GPSSpeedRef") or "").upper()
+
+        if speed_ref == "K":
+            speed_kmh = raw_speed
+        elif speed_ref == "M":
+            speed_kmh = raw_speed * 1.609344
+        elif speed_ref == "N":
+            speed_kmh = raw_speed * 1.852
+        else:
+            # GoPro GPMF → tipicamente m/s
+            speed_kmh = raw_speed * 3.6
 
         heading = (
             _to_float(row.get("GPSImgDirection"))
@@ -183,7 +194,7 @@ def extract_gopro_telemetry(video_path):
             "lat": lat,
             "lon": lon,
             "alt": alt,
-            "speed_kmh": speed,
+            "speed_kmh": speed_kmh,
             "heading": heading,
         })
 
