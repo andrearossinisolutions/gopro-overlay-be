@@ -357,9 +357,9 @@ def _format_speed(value_kmh: float, units: str) -> str:
 
 
 def _format_altitude(value_m: float, units: str) -> str:
-    if units == "imperial":
-        return f"{value_m * 3.28084:.0f} ft"
-    return f"{value_m:.0f} m"
+    if units == "metric":
+        return f"{value_m:.0f} m"
+    return f"{value_m * 3.28084:.0f} ft"
 
 
 def _round_up(value: float, step: float) -> float:
