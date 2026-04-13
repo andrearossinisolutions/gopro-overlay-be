@@ -37,45 +37,25 @@ def _require_exiftool() -> str:
 
 
 def _run_json_command(cmd: list[str]) -> list[dict[str, Any]]:
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
-        raise TelemetryExtractionError(
-            result.stderr.strip() or f"Comando fallito: {' '.join(cmd)}"
-        )
+        raise TelemetryExtractionError(result.stderr.strip())
 
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise TelemetryExtractionError("Output JSON non valido da ExifTool.") from exc
-
-    if not isinstance(payload, list):
-        raise TelemetryExtractionError("ExifTool ha restituito un payload inatteso.")
-
-    return payload
+    return json.loads(result.stdout)
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
     if not value:
         return None
 
-    value = value.strip()
-
-    candidates = [
+    for fmt in [
         "%Y:%m:%d %H:%M:%S.%fZ",
         "%Y:%m:%d %H:%M:%SZ",
         "%Y:%m:%d %H:%M:%S.%f",
         "%Y:%m:%d %H:%M:%S",
-    ]
-
-    for fmt in candidates:
+    ]:
         try:
-            dt = datetime.strptime(value, fmt)
-            return dt.replace(tzinfo=timezone.utc)
+            return datetime.strptime(value, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
 
@@ -85,17 +65,13 @@ def _parse_datetime(value: str | None) -> datetime | None:
 def _to_float(value: Any) -> float | None:
     if value is None:
         return None
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    text = str(value).strip().replace(",", ".")
     try:
-        return float(text)
+        return float(str(value).replace(",", "."))
     except ValueError:
         return None
 
 
-def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+def _haversine_km(lat1, lon1, lat2, lon2):
     r = 6371.0
     p1 = math.radians(lat1)
     p2 = math.radians(lat2)
@@ -106,134 +82,85 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * r * math.asin(math.sqrt(a))
 
 
-def _group_doc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    ExifTool con -G3 può restituire:
-    - più oggetti JSON, uno per DocN
-    - oppure un solo oggetto con tante chiavi tipo Doc1:GPSLatitude, Doc2:GPSSpeed, ...
+def _compute_heading(lat1, lon1, lat2, lon2):
+    lat1 = math.radians(lat1)
+    lat2 = math.radians(lat2)
+    dlon = math.radians(lon2 - lon1)
 
-    Questa funzione normalizza tutto in una lista di dict, uno per ogni DocN.
-    """
-    grouped: dict[str, dict[str, Any]] = {}
+    x = math.sin(dlon) * math.cos(lat2)
+    y = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+
+    bearing = math.degrees(math.atan2(x, y))
+    return (bearing + 360) % 360
+
+
+def _group_doc_rows(rows):
+    grouped = {}
 
     for row in rows:
-        current_plain: dict[str, Any] = {}
-
         for key, value in row.items():
             match = _DOC_KEY_RE.match(key)
             if match:
-                doc_id, tag_name = match.groups()
+                doc_id, tag = match.groups()
                 grouped.setdefault(doc_id, {})
-                grouped[doc_id][tag_name] = value
-            else:
-                current_plain[key] = value
+                grouped[doc_id][tag] = value
 
-        # Caso alternativo: ExifTool può già restituire una riga “piatta” con GPSLatitude senza prefisso.
-        if "GPSLatitude" in current_plain and "GPSLongitude" in current_plain:
-            doc_id = f"ROW{len(grouped) + 1}"
-            grouped[doc_id] = current_plain
-
-    def sort_key(item: tuple[str, dict[str, Any]]) -> tuple[int, str]:
-        key = item[0]
-        if key.startswith("Doc"):
-            try:
-                return (0, f"{int(key[3:]):09d}")
-            except ValueError:
-                return (0, key)
-        return (1, key)
-
-    return [payload for _, payload in sorted(grouped.items(), key=sort_key)]
+    return [grouped[k] for k in sorted(grouped.keys())]
 
 
-def probe_video(video_path: str | Path) -> VideoInfo:
+def probe_video(video_path):
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
-        return VideoInfo(
-            duration_seconds=0.0,
-            fps=0.0,
-            width=0,
-            height=0,
-            codec="unknown",
-        )
+        return VideoInfo(0, 0, 0, 0, "unknown")
 
     cmd = [
         ffprobe,
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=avg_frame_rate,width,height,codec_name:format=duration",
-        "-of",
-        "json",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=avg_frame_rate,width,height,codec_name:format=duration",
+        "-of", "json",
         str(video_path),
     ]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        return VideoInfo(
-            duration_seconds=0.0,
-            fps=0.0,
-            width=0,
-            height=0,
-            codec="unknown",
-        )
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    data = json.loads(result.stdout)
 
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return VideoInfo(
-            duration_seconds=0.0,
-            fps=0.0,
-            width=0,
-            height=0,
-            codec="unknown",
-        )
+    stream = data["streams"][0]
+    fmt = data["format"]
 
-    stream = (payload.get("streams") or [{}])[0]
-    fmt = payload.get("format") or {}
-
-    fps_raw = str(stream.get("avg_frame_rate", "0/1"))
-    fps = 0.0
-    if "/" in fps_raw:
-        n, d = fps_raw.split("/", 1)
-        try:
-            fps = float(n) / float(d) if float(d) else 0.0
-        except ValueError:
-            fps = 0.0
+    fps = eval(stream["avg_frame_rate"]) if "avg_frame_rate" in stream else 0
 
     return VideoInfo(
-        duration_seconds=float(fmt.get("duration") or 0.0),
+        duration_seconds=float(fmt.get("duration", 0)),
         fps=fps,
-        width=int(stream.get("width") or 0),
-        height=int(stream.get("height") or 0),
-        codec=str(stream.get("codec_name") or "unknown"),
+        width=stream.get("width", 0),
+        height=stream.get("height", 0),
+        codec=stream.get("codec_name", "unknown"),
     )
 
 
-def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
+def extract_gopro_telemetry(video_path):
     exiftool = _require_exiftool()
     video_path = Path(video_path)
 
     if not video_path.exists():
-        raise TelemetryExtractionError(f"File video non trovato: {video_path}")
+        raise TelemetryExtractionError(f"File non trovato: {video_path}")
 
     video = probe_video(video_path)
 
-    cmd = [
+    rows = _run_json_command([
         exiftool,
         "-ee",
-        "-api",
-        "LargeFileSupport=1",
         "-G3",
         "-j",
         "-n",
         str(video_path),
-    ]
-    rows = _run_json_command(cmd)
+    ])
+
     doc_rows = _group_doc_rows(rows)
 
-    samples_raw: list[dict[str, Any]] = []
+    samples_raw = []
+
     for row in doc_rows:
         lat = _to_float(row.get("GPSLatitude"))
         lon = _to_float(row.get("GPSLongitude"))
@@ -241,68 +168,53 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
             continue
 
         alt = _to_float(row.get("GPSAltitude")) or 0.0
-
-        speed = _to_float(row.get("GPSSpeed"))
-        speed_ref = str(row.get("GPSSpeedRef") or "").upper()
-
-        speed_kmh = 0.0
-        if speed is not None:
-            if speed_ref == "K":
-                speed_kmh = speed
-            elif speed_ref == "M":
-                speed_kmh = speed * 1.609344
-            elif speed_ref == "N":
-                speed_kmh = speed * 1.852
-            else:
-                speed_kmh = speed
+        speed = _to_float(row.get("GPSSpeed")) or 0.0
 
         heading = (
             _to_float(row.get("GPSImgDirection"))
             or _to_float(row.get("GPSDestBearing"))
-            or 0.0
+            or None
         )
 
-        gps_dt = _parse_datetime(
-            row.get("GPSDateTime")
-            or row.get("GPSDateStamp")
-            or row.get("DateTimeOriginal")
-            or row.get("CreateDate")
-        )
+        gps_dt = _parse_datetime(row.get("GPSDateTime"))
 
-        samples_raw.append(
-            {
-                "gps_dt": gps_dt,
-                "lat": lat,
-                "lon": lon,
-                "alt": alt,
-                "speed_kmh": speed_kmh,
-                "heading": heading,
-            }
-        )
+        samples_raw.append({
+            "gps_dt": gps_dt,
+            "lat": lat,
+            "lon": lon,
+            "alt": alt,
+            "speed_kmh": speed,
+            "heading": heading,
+        })
 
-    if not samples_raw:
-        raise TelemetryExtractionError(
-            "Nessun punto GPS temporale trovato nel video GoPro. "
-            "Verifica che il GPS fosse attivo e che il file contenga telemetria GPMF."
-        )
+    if len(samples_raw) < 2:
+        raise TelemetryExtractionError("Telemetria insufficiente (meno di 2 punti).")
 
-    samples_raw.sort(
-        key=lambda x: x["gps_dt"] or datetime.fromtimestamp(0, tz=timezone.utc)
-    )
+    samples_raw.sort(key=lambda x: x["gps_dt"] or datetime.now(timezone.utc))
     t0 = samples_raw[0]["gps_dt"]
 
-    normalized_samples: list[dict[str, Any]] = []
-    total_distance_km = 0.0
-    max_speed_kmh = 0.0
-    elevation_gain_m = 0.0
-
+    normalized = []
     prev = None
-    for index, item in enumerate(samples_raw):
-        gps_dt = item["gps_dt"]
-        if gps_dt and t0:
-            t = max(0.0, (gps_dt - t0).total_seconds())
+
+    total_distance = 0
+    max_speed = 0
+    elevation_gain = 0
+
+    for i, item in enumerate(samples_raw):
+        if item["gps_dt"] and t0:
+            t = (item["gps_dt"] - t0).total_seconds()
         else:
-            t = float(index)
+            t = i
+
+        if prev:
+            computed_heading = _compute_heading(
+                prev["lat"], prev["lon"],
+                item["lat"], item["lon"]
+            )
+        else:
+            computed_heading = 0.0
+
+        heading = item["heading"] if item["heading"] is not None else computed_heading
 
         sample = {
             "t": round(t, 3),
@@ -310,19 +222,18 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
             "lon": round(item["lon"], 7),
             "alt": round(item["alt"], 2),
             "speed_kmh": round(item["speed_kmh"], 2),
-            "heading": round(item["heading"], 2),
+            "heading": round(heading, 2),
         }
 
-        if prev is not None:
-            total_distance_km += _haversine_km(
-                prev["lat"], prev["lon"], sample["lat"], sample["lon"]
-            )
-            alt_gain = sample["alt"] - prev["alt"]
-            if alt_gain > 0:
-                elevation_gain_m += alt_gain
+        if prev:
+            total_distance += _haversine_km(prev["lat"], prev["lon"], sample["lat"], sample["lon"])
+            gain = sample["alt"] - prev["alt"]
+            if gain > 0:
+                elevation_gain += gain
 
-        max_speed_kmh = max(max_speed_kmh, sample["speed_kmh"])
-        normalized_samples.append(sample)
+        max_speed = max(max_speed, sample["speed_kmh"])
+
+        normalized.append(sample)
         prev = sample
 
     return {
@@ -333,29 +244,20 @@ def extract_gopro_telemetry(video_path: str | Path) -> dict[str, Any]:
             "height": video.height,
             "codec": video.codec,
         },
-        "samples": normalized_samples,
+        "samples": normalized,
         "stats": {
             "has_gps": True,
-            "points": len(normalized_samples),
-            "distance_km": round(total_distance_km, 3),
-            "max_speed_kmh": round(max_speed_kmh, 2),
-            "elevation_gain_m": round(elevation_gain_m, 1),
+            "points": len(normalized),
+            "distance_km": round(total_distance, 3),
+            "max_speed_kmh": round(max_speed, 2),
+            "elevation_gain_m": round(elevation_gain, 1),
         },
     }
 
 
-def find_sample_for_time(telemetry: dict[str, Any], t: float) -> dict[str, Any] | None:
-    samples = telemetry.get("samples") or []
+def find_sample_for_time(telemetry, t):
+    samples = telemetry.get("samples", [])
     if not samples:
         return None
 
-    try:
-        target = float(t)
-    except (TypeError, ValueError):
-        return samples[0] if samples else None
-
-    nearest = min(
-        samples,
-        key=lambda sample: abs(float(sample.get("t", 0.0)) - target),
-    )
-    return nearest
+    return min(samples, key=lambda s: abs(s["t"] - t))
