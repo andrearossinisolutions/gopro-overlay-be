@@ -45,7 +45,6 @@ def process_job_sync(job_id: str) -> None:
     except Exception as exc:
         store.fail_job(job_id, f"Errore durante il processing: {exc}")
 
-
 def build_preview_payload(job_id: str, t: float) -> dict[str, Any] | None:
     job = store.get_job(job_id)
     telemetry = store.load_telemetry(job_id)
@@ -63,11 +62,11 @@ def build_preview_payload(job_id: str, t: float) -> dict[str, Any] | None:
             "speedLabel": f"{sample['speed_kmh']:.1f} km/h",
             "altitudeLabel": f"{sample['alt']:.1f} m",
             "coordinatesLabel": f"{sample['lat']:.6f}, {sample['lon']:.6f}",
+            "headingLabel": f"{sample['heading']:.0f}°",
             "timestampLabel": _format_seconds(t),
         },
         "sample": sample,
     }
-
 
 def create_render_output(job_id: str, config: RenderConfig) -> dict[str, Any] | None:
     job = store.get_job(job_id)
