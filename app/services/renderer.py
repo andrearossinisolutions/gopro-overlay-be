@@ -15,6 +15,7 @@ def render_video_with_overlay(
     source_video_path: str,
     telemetry: dict[str, Any],
     config: RenderConfig,
+    progress_callback=None,
 ) -> dict[str, str]:
     ffmpeg_path = shutil.which("ffmpeg")
     if not ffmpeg_path:
@@ -31,6 +32,8 @@ def render_video_with_overlay(
     config_path.write_text(json.dumps(config.model_dump(), indent=2), encoding="utf-8")
 
     subtitles_path = _ffmpeg_escape_path(str(ass_path.resolve()))
+    duration_seconds = float((telemetry.get("video") or {}).get("duration_seconds") or 0.0)
+
     command = [
         ffmpeg_path,
         "-y",
@@ -48,12 +51,44 @@ def render_video_with_overlay(
         "yuv420p",
         "-c:a",
         "copy",
+        "-progress",
+        "pipe:1",
+        "-nostats",
         str(output_path),
     ]
 
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or "ffmpeg ha restituito un errore durante il render.")
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    last_progress = -1
+
+    if process.stdout:
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if not line:
+                continue
+
+            if line.startswith("out_time_ms=") and duration_seconds > 0:
+                try:
+                    out_time_ms = int(line.split("=", 1)[1])
+                    rendered_seconds = out_time_ms / 1_000_000
+                    percent = min(99, max(70, int(70 + (rendered_seconds / duration_seconds) * 29)))
+                    if progress_callback and percent != last_progress:
+                        progress_callback(percent, "rendering_video")
+                        last_progress = percent
+                except ValueError:
+                    pass
+
+    stderr_output = process.stderr.read() if process.stderr else ""
+    return_code = process.wait()
+
+    if return_code != 0:
+        raise RuntimeError(stderr_output.strip() or "ffmpeg ha restituito un errore durante il render.")
 
     return {
         "rendered_video_path": str(output_path),

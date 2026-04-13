@@ -156,7 +156,16 @@ def create_render_output(job_id: str, config: RenderConfig) -> dict[str, Any] | 
     manifest_path.write_text(json.dumps(render_payload, indent=2), encoding="utf-8")
 
     try:
-        artifacts = render_video_with_overlay(job_id, job.uploaded_path, telemetry, config)
+        def on_render_progress(progress: int, step: str) -> None:
+            store.update_job(job_id, progress=progress, step=step)
+
+        artifacts = render_video_with_overlay(
+            job_id,
+            job.uploaded_path,
+            telemetry,
+            config,
+            progress_callback=on_render_progress,
+        )
     except Exception as exc:
         store.fail_job(job_id, f"Render fallito: {exc}")
         raise

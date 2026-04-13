@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from app.schemas.render import RenderConfig
 from app.services.job_store import JobStore
@@ -73,11 +73,36 @@ def get_artifacts(job_id: str) -> dict:
 
 
 @router.post("/jobs/{job_id}/render")
-def render_job(job_id: str, config: RenderConfig) -> dict:
-    try:
-        result = create_render_output(job_id, config)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    if result is None:
-        raise HTTPException(status_code=404, detail="Job non trovato o non pronto.")
-    return result
+def render_job(job_id: str, config: RenderConfig, background_tasks: BackgroundTasks) -> dict:
+    job = store.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job non trovato.")
+
+    if job.status == "rendering":
+        return {
+            "jobId": job.id,
+            "status": "rendering",
+            "message": "Render già in corso.",
+            "config": config.model_dump(),
+        }
+
+    if job.status not in {"ready", "done"}:
+        raise HTTPException(status_code=400, detail="Job non pronto per il render.")
+
+    if job.status != "rendering":
+        store.update_job(
+            job_id,
+            status="rendering",
+            progress=70,
+            step="rendering_video",
+            error_message=None,
+        )
+
+    background_tasks.add_task(create_render_output, job_id, config)
+
+    return {
+        "jobId": job.id,
+        "status": "rendering",
+        "message": "Render avviato.",
+        "config": config.model_dump(),
+    }
